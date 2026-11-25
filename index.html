@@ -832,7 +832,7 @@ function prettyRad(def){
 }
 function realRad(def){
   if (def.type === 'star') return Math.max(0.6, (def.radiusKm || 696000) * KM2AU * REAL_UPA);
-  if (def.type === 'craft') return 0.05;
+  if (def.type === 'craft') return 0.004;     // models span ~3 units → a speck beside Earth's 0.02 disc
   return Math.max(def.parent ? 0.012 : 0.02, (def.radiusKm || 500) * KM2AU * REAL_UPA);
 }
 const displayRad = (def) => lerp(prettyRad(def), realRad(def), scaleMix);
@@ -955,7 +955,7 @@ function refreshOrbitLine(v){
   if (!v.orbitLine) return;
   const attr = v.orbitLine.geometry.attributes.position;
   const isMoon = !!v.parent;
-  const f = isMoon ? moonFactor(v.def, v.parent.def) : 0;
+  const f = isMoon ? moonFactor2(v) : 0;
   for (let i = 0; i < v.orbitPtsAU.length; i++){
     const p = v.orbitPtsAU[i];
     if (isMoon){ attr.setXYZ(i, p.x*f, p.y*f, p.z*f); }
@@ -1278,9 +1278,9 @@ function updateSystem(S, T, wallDt){
       const d = v.posAU.length();
       if (d < 1e-9) v.display.set(0, 0, 0);
       else { const s = mapDist(d) / d; v.display.set(v.posAU.x*s, v.posAU.y*s, v.posAU.z*s); }
-      if (def.mode === 'l2'){ // visual nudge so it isn't buried in Earth's pixel in pretty mode
+      if (def.mode === 'l2'){ // pretty mode: nudge clear of Earth · true scale: the real 1.5 million km
         const e = S.byId.get('earth');
-        if (e){ _v3.copy(v.display).sub(e.display).normalize().multiplyScalar(lerp(1.5, 0.01, scaleMix)); v.display.copy(e.display).add(_v3); }
+        if (e){ _v3.copy(v.display).sub(e.display).normalize().multiplyScalar(lerp(1.5, REAL_UPA * Math.abs(def.offsetAU || 0.01), scaleMix)); v.display.copy(e.display).add(_v3); }
       }
     }
     v.g.position.copy(v.display);
@@ -1305,7 +1305,7 @@ function updateSystem(S, T, wallDt){
 }
 function moonFactor2(v){
   const def = v.def;
-  if (def.hug){ const p = displayRad(v.parent.def); return lerp(p * 1.35 / (def.el.a), REAL_UPA, scaleMix); }
+  if (def.hug){ const p = displayRad(v.parent.def); return p * 1.35 / def.el.a; }
   return moonFactor(def, v.parent.def);
 }
 
@@ -1345,7 +1345,7 @@ let selected = null, camTween = null;
 const followPrev = new THREE.Vector3();
 function flyTo(v, dur = 1500){
   const r = Math.max(displayRad(v.def), 0.05);
-  const dist = clamp(r * 6.2, 0.45, 900);
+  const dist = clamp(r * 6.2, lerp(0.45, 0.16, scaleMix), 900);
   const dir = new THREE.Vector3().copy(camera.position).sub(v.g.position); // NOT _v3 — the offset must survive across frames
   if (dir.lengthSq() < 1e-6) dir.set(0.5, 0.35, 1);
   dir.normalize();
