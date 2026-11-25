@@ -99,10 +99,13 @@ body{background:var(--bg);color:var(--ink);font-family:var(--font-h);font-size:1
 .barSec{display:flex;align-items:center;gap:9px}
 .barDiv{width:1px;align-self:stretch;background:var(--line)}
 #bar label{font-family:var(--font-m);font-size:10px;letter-spacing:.18em;color:var(--faint);text-transform:uppercase}
-#speed{appearance:none;width:150px;height:3px;border-radius:99px;background:var(--line-2);outline:none;cursor:pointer}
-#speed::-webkit-slider-thumb{appearance:none;width:13px;height:13px;border-radius:99px;background:var(--accent);
+#speed,#zoom{appearance:none;width:150px;height:3px;border-radius:99px;background:var(--line-2);outline:none;cursor:pointer}
+#speed::-webkit-slider-thumb,#zoom::-webkit-slider-thumb{appearance:none;width:13px;height:13px;border-radius:99px;background:var(--accent);
   box-shadow:0 0 10px var(--accent);cursor:pointer}
 #speedOut{font-family:var(--font-m);font-size:11px;color:var(--accent);min-width:86px;text-align:left}
+#zoom{width:130px}
+.zbtn{width:30px;padding:5px 0;text-align:center;font-size:14px;line-height:1;touch-action:none}
+#zoomLbl{font-family:var(--font-m);font-size:11px;color:var(--accent);min-width:78px;text-align:left}
 #dateIn{appearance:none;border:1px solid var(--line);background:rgba(0,0,0,.25);border-radius:8px;color:var(--ink);
   font-family:var(--font-m);font-size:11px;padding:6px 8px;outline:none;color-scheme:dark}
 #layerPop{position:fixed;bottom:74px;left:50%;transform:translateX(-50%) translateY(8px);z-index:11;padding:14px;
@@ -176,6 +179,12 @@ body{background:var(--bg);color:var(--ink);font-family:var(--font-h);font-size:1
 <footer id="bar" class="glass">
   <div class="barSec"><label>Speed</label><input type="range" id="speed" min="0" max="1" step="0.001" value="0.712"><span id="speedOut"></span></div>
   <div class="barDiv"></div>
+  <div class="barSec"><label>Zoom</label>
+    <button class="tbtn zbtn" id="zoomOutBtn" title="zoom out — tap, or hold (key: −)">−</button>
+    <input type="range" id="zoom" min="0" max="1" step="0.001" value="0.5" title="drag to either end to go all the way out or in">
+    <button class="tbtn zbtn" id="zoomInBtn" title="zoom in — tap, or hold (key: +)">+</button>
+    <span id="zoomLbl"></span></div>
+  <div class="barDiv"></div>
   <div class="barSec">
     <button class="tbtn" id="playBtn" title="pause / play time">❚❚</button>
     <input type="date" id="dateIn">
@@ -223,7 +232,7 @@ body{background:var(--bg);color:var(--ink);font-family:var(--font-h);font-size:1
 
 <div id="toast"></div>
 <div id="pulseHud" class="glass"><h4 id="pulseTitle">LIGHT WAVEFRONT</h4><div id="pulseList"></div></div>
-<div id="hint">drag — rotate · scroll — zoom · right-drag — pan<br>ctrl+scroll — fly · WASD — roam · click a body to visit it<br>←/→ step bodies · esc — overview</div>
+<div id="hint">drag — rotate · scroll, +/− or the zoom slider — zoom · right-drag — pan<br>ctrl+scroll — fly · WASD — roam · click a body to visit it<br>←/→ step bodies · esc — overview</div>
 
 <div id="loading"><div class="ring"></div><p>PLANETARIUM</p></div>
 
@@ -637,6 +646,7 @@ $('scene').appendChild(renderer.domElement);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true; controls.dampingFactor = 0.06;
+controls.zoomSpeed = 2;
 controls.minDistance = 0.15; controls.maxDistance = 1400000; // pull all the way out of the galaxy
 
 const composer = new EffectComposer(renderer);
@@ -1344,6 +1354,7 @@ function updateLabels(S){
 let selected = null, camTween = null;
 const followPrev = new THREE.Vector3();
 function flyTo(v, dur = 1500){
+  zoom.goal = null; zoom.rate = 0; // a fly-to overrides any zoom still gliding
   const r = Math.max(displayRad(v.def), 0.05);
   const dist = clamp(r * 6.2, lerp(0.45, 0.16, scaleMix), 900);
   const dir = new THREE.Vector3().copy(camera.position).sub(v.g.position); // NOT _v3 — the offset must survive across frames
@@ -1358,6 +1369,7 @@ function flyTo(v, dur = 1500){
     view: v, offset: dir.multiplyScalar(dist).add(new THREE.Vector3(0, dist * 0.22, 0)) };
 }
 function flyOverview(){
+  zoom.goal = null; zoom.rate = 0;
   const far = mapDist(34);
   camTween = { t0: performance.now(), dur: 1600, c0: camera.position.clone(), g0: controls.target.clone(),
     view: null, fixedTarget: new THREE.Vector3(0, 0, 0),
@@ -1886,6 +1898,74 @@ function stepNav(d){
   selectBody(list[((i + d) % list.length + list.length) % list.length]);
 }
 
+/* ---- zoom: slider spans the whole range (into the focused body ⇄ out past the galaxy),
+   −/+ step on a tap and glide while held, and the keyboard does the same ---- */
+const zoom = { goal: null, rate: 0, holdTimer: 0, dragging: false, shown: -1 };
+const ZSTEP = Math.log(2.2);
+const _zv = new THREE.Vector3();
+const camDist = () => camera.position.distanceTo(controls.target);
+function zoomFocus(){ return selected || (controls.target.lengthSq() < 1 ? SYS.cosmos.sun : null); }
+function zMinLog(){ const f = zoomFocus(); return Math.log(f ? Math.max(controls.minDistance, displayRad(f.def) * 1.8) : controls.minDistance); }
+const zMaxLog = () => Math.log(controls.maxDistance);
+function setCamDist(d){
+  d = clamp(d, Math.exp(zMinLog()), controls.maxDistance);
+  _zv.copy(camera.position).sub(controls.target);
+  if (_zv.lengthSq() < 1e-12) _zv.set(0, 0.35, 1);
+  camera.position.copy(controls.target).add(_zv.setLength(d));
+}
+function zoomBy(steps){ // + = out, − = in; repeated taps stack on the pending goal
+  const base = zoom.goal ?? Math.log(camDist());
+  zoom.goal = clamp(base + steps * ZSTEP, zMinLog(), zMaxLog());
+  stopTour();
+}
+function zoomTo(t){ zoom.goal = lerp(zMinLog(), zMaxLog(), clamp(t, 0, 1)); stopTour(); } // t: 0 = all the way in, 1 = all the way out
+function zoomZone(d){
+  if (galaxyMix > 0.5) return 'Milky Way';
+  if (camera.position.length() > 6000) return 'deep space';
+  const f = zoomFocus();
+  if (f && f !== SYS.cosmos.sun && d < displayRad(f.def) * 40) return f.def.name;
+  return 'solar system';
+}
+function stepZoom(wallDt){
+  if (camTween) return;                      // let a fly-to land first; a pending goal applies after
+  if (zoom.rate){ setCamDist(camDist() * Math.exp(zoom.rate * wallDt)); zoom.goal = null; }
+  else if (zoom.goal != null){
+    const cur = Math.log(camDist());
+    let next = lerp(cur, zoom.goal, 1 - Math.exp(-wallDt * 7));
+    if (Math.abs(next - zoom.goal) < 0.003){ next = zoom.goal; zoom.goal = null; }
+    setCamDist(Math.exp(next));
+  }
+}
+function syncZoomUi(){
+  const d = camDist();
+  const t = (Math.log(d) - zMinLog()) / (zMaxLog() - zMinLog());
+  const v = 1 - clamp(t, 0, 1);              // slider: right = closer
+  if (!zoom.dragging && Math.abs(v - zoom.shown) > 0.002){ $('zoom').value = v; zoom.shown = v; }
+  const z = zoomZone(d);
+  if ($('zoomLbl').textContent !== z) $('zoomLbl').textContent = z;
+}
+$('zoom').addEventListener('pointerdown', () => { zoom.dragging = true; });
+// hand the keyboard back after a drag so ←/→, Space and +/− keep working
+for (const id of ['zoom', 'speed']) $(id).addEventListener('change', () => $(id).blur());
+addEventListener('pointerup', () => { zoom.dragging = false; });
+$('zoom').addEventListener('input', () => { zoom.shown = parseFloat($('zoom').value); zoomTo(1 - zoom.shown); });
+for (const [id, dir] of [['zoomInBtn', -1], ['zoomOutBtn', 1]]){
+  const b = $(id);
+  b.addEventListener('pointerdown', (e) => {
+    e.preventDefault(); b.setPointerCapture(e.pointerId);
+    zoomBy(dir);
+    clearTimeout(zoom.holdTimer);
+    zoom.holdTimer = setTimeout(() => { zoom.rate = dir * 1.6; }, 300); // held: glide continuously
+  });
+  const release = () => { clearTimeout(zoom.holdTimer); if (zoom.rate){ zoom.rate = 0; zoom.goal = null; } };
+  b.addEventListener('pointerup', release); b.addEventListener('pointercancel', release); b.addEventListener('lostpointercapture', release);
+}
+addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT' && e.target.type !== 'range' || e.target.tagName === 'SELECT') return;
+  if (e.key === '+' || e.key === '='){ e.preventDefault(); zoomBy(-1); }
+  else if (e.key === '-' || e.key === '_'){ e.preventDefault(); zoomBy(1); }
+});
+
 /* ================================================================
    15. main loop + boot
 ================================================================ */
@@ -1925,8 +2005,10 @@ function animate(){
   stepCamTween();
   stepFly(wallDt);
   followSelected();
+  stepZoom(wallDt);
   controls.update();
   updateGalaxy(wallT);
+  syncZoomUi();
   const _t3 = performance.now();
 
   updateLabels(SYS.cosmos);

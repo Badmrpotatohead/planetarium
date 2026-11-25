@@ -21,6 +21,7 @@ three.js loads from a CDN, so the first load needs an internet connection. Plane
 ## Controls
 
 - Drag to rotate, scroll to zoom, right-drag to pan, click any body to fly to it
+- **Zoom slider** in the bottom bar: drag it to the left end to go all the way out to the Milky Way, or the right end to come all the way in to whatever you're looking at. The − / + buttons step on a tap and glide while held; the − and + keys do the same
 - ← / → step through bodies, Esc returns to the overview, Space pauses time
 - Ctrl+scroll flies forward, WASD roams
 - Keep zooming out and the sky turns into the Milky Way, with a marker where the Sun sits
